@@ -100,47 +100,106 @@ try {
         }
     };
 
-    // ROUTES: like / different / strategic
     if ($pairingType === 'like') {
-        // Build same-skill groups first (groups of 4)
-        $makeSameSkillGroups($advanced, $groups, 'Advanced');
-        $makeSameSkillGroups($intermediates, $groups, 'Intermediate');
-        $makeSameSkillGroups($beginners, $groups, 'Beginner');
-
-        // If we have fewer groups than intended number of base groups, create empty groups (we'll fill them)
-        if (count($groups) < $numGroups) {
-            $createEmptyGroups($numGroups - count($groups));
+    // Step 1: Sort players into skill-based groups first
+    $groups = [];
+    
+    // Helper to create groups of 4 from a pool
+    $createGroups = function(&$pool) {
+        $groups = [];
+        while (count($pool) >= 4) {
+            $groups[] = array_splice($pool, 0, 4);
         }
-
-        // Collect remaining players
-        $leftovers = array_merge($advanced, $intermediates, $beginners);
-
-        // Place leftovers preferring groups of the same skill and with room <5
-        foreach ($leftovers as $p) {
-            $skill = $skillOf($p);
-            $placed = false;
-
-            // 1) try groups that are same-skill (i.e., group where all members are that skill or group's skills include that skill)
-            $placed = $placeIntoGroups($p, $groups, function($g) use ($skill, $skillOf) {
-                // prefer groups whose existing players are that skill (or groups which have that skill present)
-                $skills = array_unique(array_map($skillOf, $g));
-                return in_array($skill, $skills, true) || empty($skills);
-            });
-
-            // 2) if not placed, place into any group with room
-            if (!$placed) {
-                $placed = $placeIntoGroups($p, $groups, null);
-            }
-
-            // 3) If still not placed (all groups full at 5), create a new group only if we can maintain min=4 constraint:
-            if (!$placed) {
-                // Try to create a new group only if we have at least 4 leftovers remaining (including this one)
-                // In practice this rarely runs because numGroups = floor(total/4) and we made groups accordingly.
-                $groups[] = [$p];
+        return $groups;
+    };
+    
+    // Create initial groups of 4 for each skill level
+    $advancedGroups = $createGroups($advanced);
+    $intermediateGroups = $createGroups($intermediates);
+    $beginnerGroups = $createGroups($beginners);
+    
+    // Combine all complete groups
+    $groups = array_merge($advancedGroups, $intermediateGroups, $beginnerGroups);
+    
+    // Step 2: Handle remaining players (less than 4 from each skill level)
+    $remainingPlayers = array_merge($advanced, $intermediates, $beginners);
+    
+    if (!empty($remainingPlayers)) {
+        // If we have 4 or more remaining players total, create new groups
+        while (count($remainingPlayers) >= 4) {
+            $groups[] = array_splice($remainingPlayers, 0, 4);
+        }
+        
+        // For the final remaining players (less than 4)
+        if (!empty($remainingPlayers)) {
+            foreach ($remainingPlayers as $player) {
+                $playerSkill = $player['skillLevel'];
+                $placed = false;
+                
+                // First try: Place with same skill level group that has exactly 4 players
+                foreach ($groups as &$group) {
+                    if (count($group) === 4) {
+                        $groupSkill = $group[0]['skillLevel'];
+                        if ($groupSkill === $playerSkill) {
+                            $group[] = $player;
+                            $placed = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // Second try: Place with any same skill level group that has less than 5 players
+                if (!$placed) {
+                    foreach ($groups as &$group) {
+                        if (count($group) < 5) {
+                            $groupSkill = $group[0]['skillLevel'];
+                            if ($groupSkill === $playerSkill) {
+                                $group[] = $player;
+                                $placed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Last resort: Place in any group with less than 5 players
+                if (!$placed) {
+                    foreach ($groups as &$group) {
+                        if (count($group) < 5) {
+                            $group[] = $player;
+                            $placed = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // If still not placed (shouldn't happen but just in case)
+                if (!$placed) {
+                    throw new Exception("Unable to place all players in groups", 500);
+                }
             }
         }
+    }
+    
+    // Verify all players are placed and no duplicates exist
+    $placedPlayers = [];
+    foreach ($groups as $group) {
+        foreach ($group as $player) {
+            $playerId = $player['user_id'];
+            if (in_array($playerId, $placedPlayers)) {
+                throw new Exception("Duplicate player detected in groups", 500);
+            }
+            $placedPlayers[] = $playerId;
+        }
+    }
+    
+    // Verify total count matches
+    if (count($placedPlayers) !== $totalPlayers) {
+        throw new Exception("Not all players were placed in groups", 500);
+    }
+}
 
-    } elseif ($pairingType === 'different') {
+ elseif ($pairingType === 'different') {
         // Aim: maximize diversity (A, I, B) per group of 4.
         // Create numGroups empty groups
         $createEmptyGroups($numGroups);
